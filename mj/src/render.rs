@@ -8,7 +8,34 @@ const RENDER_BIN: &str = "render";
 const RENDER_INSTALL_SCRIPT_URL: &str =
     "https://raw.githubusercontent.com/render-oss/cli/refs/heads/main/bin/install.sh";
 
-pub fn cmd_render() -> ExitCode {
+pub fn cmd_render(args: &[String]) -> ExitCode {
+    let Some(sub) = args.first() else {
+        print_usage();
+        return ExitCode::from(1);
+    };
+
+    match sub.as_str() {
+        "init" => cmd_render_init(),
+        "-h" | "--help" | "help" => {
+            print_usage();
+            ExitCode::SUCCESS
+        }
+        other => {
+            eprintln!("mj render: unknown subcommand '{other}'");
+            print_usage();
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn print_usage() {
+    println!("Usage: mj render <subcommand>");
+    println!();
+    println!("Subcommands:");
+    println!("  init    Ensure the Render CLI is installed and initialized");
+}
+
+fn cmd_render_init() -> ExitCode {
     let augmented_path = if exists(RENDER_BIN) {
         println!("Render CLI is installed.");
         None
