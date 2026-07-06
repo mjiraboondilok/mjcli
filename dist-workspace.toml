@@ -17,3 +17,6 @@ install-path = "~/.local/bin"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+
+unix-archive = ".tar.gz"
+windows-archive = ".tar.gz"
