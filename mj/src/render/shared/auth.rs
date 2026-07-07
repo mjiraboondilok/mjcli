@@ -129,22 +129,42 @@ fn save_key(path: &Path, key: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let tmp = temp_sibling(path)?;
+    let result = write_secret_file(&tmp, key).and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn write_secret_file(tmp: &Path, key: &str) -> io::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = opts.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
+    let mut file = opts.open(tmp)?;
     file.write_all(key.as_bytes())?;
     file.write_all(b"\n")?;
+    file.sync_all()?;
     Ok(())
+}
+
+fn temp_sibling(path: &Path) -> io::Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let mut name = std::ffi::OsString::from(".");
+    name.push(file_name);
+    name.push(format!(".tmp.{pid}.{nanos}"));
+    Ok(path.parent().unwrap_or(Path::new("")).join(name))
 }
 
 fn clear_key(path: &Path) -> io::Result<bool> {
@@ -328,6 +348,21 @@ mod tests {
         let store = resolve_store(None, None, None, temp.path());
         assert_eq!(store.path, temp.path().join(APP_DIR).join(STORE_FILE));
         assert!(!store.ephemeral);
+    }
+
+    #[test]
+    fn save_key_leaves_no_tmp_siblings_behind() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        save_key(&path, "rnd_first").unwrap();
+        save_key(&path, "rnd_second").unwrap();
+
+        let entries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from(STORE_FILE)]);
+        assert_eq!(load_key(&path), Some("rnd_second".to_owned()));
     }
 
     #[test]
