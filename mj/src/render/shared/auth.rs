@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(crate) const ENV_VAR: &str = "RENDER_API_KEY";
+const APP_DIR: &str = "mj";
 const STORE_FILE: &str = "mj-render-api-key";
 pub(crate) const CREATE_KEY_URL: &str = "https://dashboard.render.com/u/settings?add-api-key";
 const API_OWNERS_URL: &str = "https://api.render.com/v1/owners?limit=1";
@@ -30,10 +31,33 @@ pub(crate) enum Validity {
     Unknown(String),
 }
 
-pub(crate) fn effective_key(store_path: &Path) -> Option<(String, KeySource)> {
-    env_key()
-        .map(|k| (k, KeySource::Env))
-        .or_else(|| load_key(store_path).map(|k| (k, KeySource::Stored)))
+pub(crate) struct Store {
+    path: PathBuf,
+    ephemeral: bool,
+}
+
+impl Store {
+    pub(crate) fn effective_key(&self) -> Option<(String, KeySource)> {
+        env_key()
+            .map(|k| (k, KeySource::Env))
+            .or_else(|| load_key(&self.path).map(|k| (k, KeySource::Stored)))
+    }
+
+    pub(crate) fn save(&self, key: &str) -> io::Result<()> {
+        save_key(&self.path, key)
+    }
+
+    pub(crate) fn clear(&self) -> io::Result<bool> {
+        clear_key(&self.path)
+    }
+
+    pub(crate) fn retention_hint(&self) -> &'static str {
+        if self.ephemeral {
+            "It will be used by `mj` until this machine restarts or you run `mj render exit`."
+        } else {
+            "It will be used by `mj` until you run `mj render exit`."
+        }
+    }
 }
 
 pub(crate) fn env_key() -> Option<String> {
@@ -47,16 +71,39 @@ pub(crate) fn nonempty_trimmed(s: String) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-pub(crate) fn default_store_path() -> PathBuf {
-    resolve_store_path(env::var_os("XDG_RUNTIME_DIR").as_deref(), &env::temp_dir())
+pub(crate) fn default_store() -> Store {
+    resolve_store(
+        env::var_os("XDG_RUNTIME_DIR").as_deref(),
+        env::var_os("XDG_STATE_HOME").as_deref(),
+        env::var_os("HOME").as_deref(),
+        &env::temp_dir(),
+    )
 }
 
-fn resolve_store_path(xdg_runtime_dir: Option<&OsStr>, temp_dir: &Path) -> PathBuf {
-    let dir = xdg_runtime_dir
+fn resolve_store(
+    xdg_runtime_dir: Option<&OsStr>,
+    xdg_state_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+    temp_dir: &Path,
+) -> Store {
+    if let Some(dir) = xdg_runtime_dir
         .map(PathBuf::from)
         .filter(|p| p.is_absolute() && p.is_dir())
+    {
+        return Store {
+            path: dir.join(STORE_FILE),
+            ephemeral: true,
+        };
+    }
+    let state_dir = xdg_state_home
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| home.map(|h| PathBuf::from(h).join(".local").join("state")))
         .unwrap_or_else(|| temp_dir.to_path_buf());
-    dir.join(STORE_FILE)
+    Store {
+        path: state_dir.join(APP_DIR).join(STORE_FILE),
+        ephemeral: false,
+    }
 }
 
 pub(crate) fn warn_env_override(just_saved: Option<&str>) {
@@ -78,7 +125,10 @@ fn load_key(path: &Path) -> Option<String> {
         .and_then(nonempty_trimmed)
 }
 
-pub(crate) fn save_key(path: &Path, key: &str) -> io::Result<()> {
+fn save_key(path: &Path, key: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -97,7 +147,7 @@ pub(crate) fn save_key(path: &Path, key: &str) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn clear_key(path: &Path) -> io::Result<bool> {
+fn clear_key(path: &Path) -> io::Result<bool> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -135,6 +185,13 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    fn home_state_path(home: &Path) -> PathBuf {
+        home.join(".local")
+            .join("state")
+            .join(APP_DIR)
+            .join(STORE_FILE)
+    }
 
     #[test]
     fn nonempty_trimmed_trims_and_rejects_empty() {
@@ -200,31 +257,85 @@ mod tests {
     }
 
     #[test]
-    fn resolve_store_path_prefers_xdg_runtime_dir_when_valid() {
+    fn resolve_store_prefers_xdg_runtime_dir_when_valid() {
         let xdg = TempDir::new().unwrap();
         let temp = TempDir::new().unwrap();
-        let path = resolve_store_path(Some(xdg.path().as_os_str()), temp.path());
-        assert_eq!(path, xdg.path().join(STORE_FILE));
+        let store = resolve_store(Some(xdg.path().as_os_str()), None, None, temp.path());
+        assert_eq!(store.path, xdg.path().join(STORE_FILE));
+        assert!(store.ephemeral);
     }
 
     #[test]
-    fn resolve_store_path_falls_back_when_xdg_missing_or_invalid() {
+    fn resolve_store_falls_back_to_xdg_state_home() {
+        let state = TempDir::new().unwrap();
         let temp = TempDir::new().unwrap();
-        assert_eq!(
-            resolve_store_path(None, temp.path()),
-            temp.path().join(STORE_FILE)
-        );
+        let store = resolve_store(None, Some(state.path().as_os_str()), None, temp.path());
+        assert_eq!(store.path, state.path().join(APP_DIR).join(STORE_FILE));
+        assert!(!store.ephemeral);
+    }
 
+    #[test]
+    fn resolve_store_falls_back_to_home_local_state() {
+        let home = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = resolve_store(None, None, Some(home.path().as_os_str()), temp.path());
+        assert_eq!(store.path, home_state_path(home.path()));
+        assert!(!store.ephemeral);
+    }
+
+    #[test]
+    fn resolve_store_ignores_invalid_xdg_runtime_dir() {
+        let home = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap();
         let missing = temp.path().join("does-not-exist");
-        assert_eq!(
-            resolve_store_path(Some(missing.as_os_str()), temp.path()),
-            temp.path().join(STORE_FILE)
-        );
 
-        assert_eq!(
-            resolve_store_path(Some(OsStr::new("relative/path")), temp.path()),
-            temp.path().join(STORE_FILE)
+        let store = resolve_store(
+            Some(missing.as_os_str()),
+            None,
+            Some(home.path().as_os_str()),
+            temp.path(),
         );
+        assert_eq!(store.path, home_state_path(home.path()));
+        assert!(!store.ephemeral);
+
+        let store = resolve_store(
+            Some(OsStr::new("relative/path")),
+            None,
+            Some(home.path().as_os_str()),
+            temp.path(),
+        );
+        assert_eq!(store.path, home_state_path(home.path()));
+        assert!(!store.ephemeral);
+    }
+
+    #[test]
+    fn resolve_store_ignores_relative_xdg_state_home() {
+        let home = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = resolve_store(
+            None,
+            Some(OsStr::new("relative/state")),
+            Some(home.path().as_os_str()),
+            temp.path(),
+        );
+        assert_eq!(store.path, home_state_path(home.path()));
+        assert!(!store.ephemeral);
+    }
+
+    #[test]
+    fn resolve_store_last_resort_is_temp_dir() {
+        let temp = TempDir::new().unwrap();
+        let store = resolve_store(None, None, None, temp.path());
+        assert_eq!(store.path, temp.path().join(APP_DIR).join(STORE_FILE));
+        assert!(!store.ephemeral);
+    }
+
+    #[test]
+    fn save_key_creates_missing_parent_directories() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nested").join("mj").join(STORE_FILE);
+        save_key(&path, "rnd_secret").unwrap();
+        assert_eq!(load_key(&path), Some("rnd_secret".to_owned()));
     }
 
     #[test]
