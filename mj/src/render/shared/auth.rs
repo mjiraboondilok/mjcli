@@ -60,7 +60,7 @@ impl Store {
     }
 }
 
-pub(crate) fn env_key() -> Option<String> {
+fn env_key() -> Option<String> {
     env::var_os(ENV_VAR)
         .and_then(|s| s.into_string().ok())
         .and_then(nonempty_trimmed)
@@ -126,45 +126,14 @@ fn load_key(path: &Path) -> Option<String> {
 }
 
 fn save_key(path: &Path, key: &str) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = temp_sibling(path)?;
-    let result = write_secret_file(&tmp, key).and_then(|()| std::fs::rename(&tmp, path));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
-
-fn write_secret_file(tmp: &Path, key: &str) -> io::Result<()> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut file = opts.open(tmp)?;
-    file.write_all(key.as_bytes())?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
+    let parent = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(key.as_bytes())?;
+    tmp.write_all(b"\n")?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
     Ok(())
-}
-
-fn temp_sibling(path: &Path) -> io::Result<PathBuf> {
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-    let mut name = std::ffi::OsString::from(".");
-    name.push(file_name);
-    name.push(format!(".tmp.{pid}.{nanos}"));
-    Ok(path.parent().unwrap_or(Path::new("")).join(name))
 }
 
 fn clear_key(path: &Path) -> io::Result<bool> {
