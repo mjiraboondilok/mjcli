@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -47,7 +48,15 @@ pub(crate) fn nonempty_trimmed(s: String) -> Option<String> {
 }
 
 pub(crate) fn default_store_path() -> PathBuf {
-    env::temp_dir().join(STORE_FILE)
+    resolve_store_path(env::var_os("XDG_RUNTIME_DIR").as_deref(), &env::temp_dir())
+}
+
+fn resolve_store_path(xdg_runtime_dir: Option<&OsStr>, temp_dir: &Path) -> PathBuf {
+    let dir = xdg_runtime_dir
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute() && p.is_dir())
+        .unwrap_or_else(|| temp_dir.to_path_buf());
+    dir.join(STORE_FILE)
 }
 
 pub(crate) fn warn_env_override(just_saved: Option<&str>) {
@@ -188,6 +197,34 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn resolve_store_path_prefers_xdg_runtime_dir_when_valid() {
+        let xdg = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap();
+        let path = resolve_store_path(Some(xdg.path().as_os_str()), temp.path());
+        assert_eq!(path, xdg.path().join(STORE_FILE));
+    }
+
+    #[test]
+    fn resolve_store_path_falls_back_when_xdg_missing_or_invalid() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(
+            resolve_store_path(None, temp.path()),
+            temp.path().join(STORE_FILE)
+        );
+
+        let missing = temp.path().join("does-not-exist");
+        assert_eq!(
+            resolve_store_path(Some(missing.as_os_str()), temp.path()),
+            temp.path().join(STORE_FILE)
+        );
+
+        assert_eq!(
+            resolve_store_path(Some(OsStr::new("relative/path")), temp.path()),
+            temp.path().join(STORE_FILE)
+        );
     }
 
     #[test]
