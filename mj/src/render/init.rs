@@ -1,5 +1,5 @@
 use crate::render::shared::auth::{self, Validity};
-use std::io::{self, BufRead, Write};
+use std::io;
 use std::process::ExitCode;
 
 pub(super) fn cmd_render_init() -> ExitCode {
@@ -29,7 +29,7 @@ pub(super) fn cmd_render_init() -> ExitCode {
     println!("  {}", auth::CREATE_KEY_URL);
     println!();
 
-    let provided = match prompt_line("Paste your Render API key: ") {
+    let provided = match prompt_secret("Paste your Render API key (input hidden): ") {
         Ok(Some(k)) => k,
         Ok(None) => {
             eprintln!("No key provided.");
@@ -67,50 +67,10 @@ pub(super) fn cmd_render_init() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn prompt_line(prompt: &str) -> io::Result<Option<String>> {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    read_trimmed_line(prompt, &mut reader, &mut writer)
-}
-
-fn read_trimmed_line<R: BufRead, W: Write>(
-    prompt: &str,
-    reader: &mut R,
-    writer: &mut W,
-) -> io::Result<Option<String>> {
-    write!(writer, "{prompt}")?;
-    writer.flush()?;
-    let mut input = String::new();
-    if reader.read_line(&mut input)? == 0 {
-        return Ok(None);
-    }
-    Ok(auth::nonempty_trimmed(input))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn read_trimmed_line_returns_trimmed_value_and_writes_prompt() {
-        let mut reader: &[u8] = b"  rnd_abc123  \n";
-        let mut writer: Vec<u8> = Vec::new();
-        let got = read_trimmed_line("Key: ", &mut reader, &mut writer).unwrap();
-        assert_eq!(got, Some("rnd_abc123".to_owned()));
-        assert_eq!(String::from_utf8(writer).unwrap(), "Key: ");
-    }
-
-    #[test]
-    fn read_trimmed_line_returns_none_on_blank_or_eof() {
-        for input in ["   \n".as_bytes(), b"" as &[u8]] {
-            let mut reader = input;
-            let mut writer: Vec<u8> = Vec::new();
-            assert_eq!(
-                read_trimmed_line("Key: ", &mut reader, &mut writer).unwrap(),
-                None
-            );
-        }
+fn prompt_secret(prompt: &str) -> io::Result<Option<String>> {
+    match rpassword::prompt_password(prompt) {
+        Ok(raw) => Ok(auth::nonempty_trimmed(raw)),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(e) => Err(e),
     }
 }
