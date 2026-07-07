@@ -3,9 +3,9 @@ use std::io;
 use std::process::ExitCode;
 
 pub(super) fn cmd_render_init() -> ExitCode {
-    let store_path = auth::default_store_path();
+    let store = auth::default_store();
 
-    if let Some((existing, source)) = auth::effective_key(&store_path) {
+    if let Some((existing, source)) = store.effective_key() {
         println!("Found a Render API key ({}).", source.describe());
         match auth::validate_key(&existing) {
             Validity::Valid => {
@@ -54,13 +54,13 @@ pub(super) fn cmd_render_init() -> ExitCode {
         }
     }
 
-    if let Err(e) = auth::save_key(&store_path, &provided) {
+    if let Err(e) = store.save(&provided) {
         eprintln!("Failed to save the API key: {e}");
         return ExitCode::FAILURE;
     }
 
     println!("API key validated and saved.");
-    println!("It will be used by `mj` until this machine restarts or you run `mj render exit`.");
+    println!("{}", store.retention_hint());
 
     auth::warn_env_override(Some(&provided));
 
