@@ -184,19 +184,12 @@ pub(crate) fn validate_key(key: &str) -> Validity {
         .header("Accept", "application/json")
         .call();
     match result {
-        Ok(resp) => classify_status(resp.status().as_u16()),
-        Err(ureq::Error::StatusCode(code)) => classify_status(code),
-        Err(e) => Validity::Unknown(format!("could not reach the Render API: {e}")),
-    }
-}
-
-fn classify_status(code: u16) -> Validity {
-    match code {
-        200 => Validity::Valid,
-        401 | 403 => Validity::Invalid,
-        other => Validity::Unknown(format!(
-            "unexpected HTTP status {other} from the Render API"
+        Ok(_) => Validity::Valid,
+        Err(ureq::Error::StatusCode(401 | 403)) => Validity::Invalid,
+        Err(ureq::Error::StatusCode(code)) => Validity::Unknown(format!(
+            "unexpected HTTP status {code} from the Render API"
         )),
+        Err(e) => Validity::Unknown(format!("could not reach the Render API: {e}")),
     }
 }
 
@@ -371,13 +364,5 @@ mod tests {
         let path = dir.path().join("nested").join("mj").join(STORE_FILE);
         save_key(&path, "rnd_secret").unwrap();
         assert_eq!(load_key(&path), Some("rnd_secret".to_owned()));
-    }
-
-    #[test]
-    fn classify_status_maps_codes() {
-        assert!(matches!(classify_status(200), Validity::Valid));
-        assert!(matches!(classify_status(401), Validity::Invalid));
-        assert!(matches!(classify_status(403), Validity::Invalid));
-        assert!(matches!(classify_status(500), Validity::Unknown(_)));
     }
 }
