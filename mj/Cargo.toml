@@ -8,6 +8,7 @@ repository = "https://github.com/mjiraboondilok/mjcli"
 readme = "../README.md"
 
 [dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 tempfile = "3"

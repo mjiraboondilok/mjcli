@@ -1,7 +1,10 @@
+use crate::render::exit::cmd_render_exit;
 use crate::render::init::cmd_render_init;
 use std::process::ExitCode;
 
+mod exit;
 mod init;
+mod shared;
 
 pub fn cmd_render(args: &[String]) -> ExitCode {
     let Some(sub) = args.first() else {
@@ -11,6 +14,7 @@ pub fn cmd_render(args: &[String]) -> ExitCode {
 
     match sub.as_str() {
         "init" => cmd_render_init(),
+        "exit" => cmd_render_exit(),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -27,5 +31,6 @@ fn print_usage() {
     println!("Usage: mj render <subcommand>");
     println!();
     println!("Subcommands:");
-    println!("  init    Ensure the Render CLI is installed and initialized");
+    println!("  init    Save and validate a Render API key");
+    println!("  exit    Delete the saved Render API key");
 }
