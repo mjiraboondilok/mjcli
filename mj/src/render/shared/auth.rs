@@ -72,10 +72,10 @@ impl Store {
 fn env_key() -> Option<String> {
     env::var_os(ENV_VAR)
         .and_then(|s| s.into_string().ok())
-        .and_then(nonempty_trimmed)
+        .and_then(|s| nonempty_trimmed(&s))
 }
 
-pub(crate) fn nonempty_trimmed(s: String) -> Option<String> {
+pub(crate) fn nonempty_trimmed(s: &str) -> Option<String> {
     let trimmed = s.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
@@ -131,7 +131,7 @@ pub(crate) fn warn_env_override(just_saved: Option<&str>) {
 fn load_key(path: &Path) -> Option<String> {
     std::fs::read_to_string(path)
         .ok()
-        .and_then(nonempty_trimmed)
+        .and_then(|s| nonempty_trimmed(&s))
 }
 
 fn save_key(path: &Path, key: &str) -> io::Result<()> {
@@ -186,12 +186,9 @@ mod tests {
 
     #[test]
     fn nonempty_trimmed_trims_and_rejects_empty() {
-        assert_eq!(
-            nonempty_trimmed("  rnd_abc  ".to_owned()),
-            Some("rnd_abc".to_owned())
-        );
-        assert_eq!(nonempty_trimmed("   ".to_owned()), None);
-        assert_eq!(nonempty_trimmed(String::new()), None);
+        assert_eq!(nonempty_trimmed("  rnd_abc  "), Some("rnd_abc".to_owned()));
+        assert_eq!(nonempty_trimmed("   "), None);
+        assert_eq!(nonempty_trimmed(""), None);
     }
 
     #[test]

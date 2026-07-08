@@ -13,7 +13,7 @@ pub fn cmd_render(args: &[String]) -> ExitCode {
     };
 
     match sub.as_str() {
-        "init" => cmd_render_init(),
+        "init" => cmd_render_init(&args[1..]),
         "exit" => cmd_render_exit(),
         "-h" | "--help" | "help" => {
             print_usage();
@@ -31,6 +31,6 @@ fn print_usage() {
     println!("Usage: mj render <subcommand>");
     println!();
     println!("Subcommands:");
-    println!("  init    Save and validate a Render API key");
-    println!("  exit    Delete the saved Render API key");
+    println!("  init [--api-key <KEY>]    Save and validate a Render API key");
+    println!("  exit                      Delete the saved Render API key");
 }
