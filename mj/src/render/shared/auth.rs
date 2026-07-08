@@ -10,6 +10,15 @@ const STORE_FILE: &str = "mj-render-api-key";
 pub(crate) const CREATE_KEY_URL: &str = "https://dashboard.render.com/u/settings?add-api-key";
 const API_OWNERS_URL: &str = "https://api.render.com/v1/owners?limit=1";
 
+pub(crate) fn hyperlink(url: &str) -> String {
+    use std::io::IsTerminal;
+    if io::stdout().is_terminal() {
+        format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\")
+    } else {
+        url.to_string()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum KeySource {
     Env,

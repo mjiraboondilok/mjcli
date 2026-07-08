@@ -26,7 +26,7 @@ pub(super) fn cmd_render_init() -> ExitCode {
 
     println!();
     println!("Create a Render API key here:");
-    println!("  {}", auth::CREATE_KEY_URL);
+    println!("  {}", auth::hyperlink(auth::CREATE_KEY_URL));
     println!();
 
     let provided = match prompt_secret("Paste your Render API key (input hidden): ") {
