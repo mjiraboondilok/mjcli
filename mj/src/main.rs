@@ -1,6 +1,8 @@
 use std::env;
 use std::process::ExitCode;
 
+mod args;
+mod psql;
 mod render;
 
 fn main() -> ExitCode {
@@ -12,6 +14,7 @@ fn main() -> ExitCode {
 
     match cmd.as_str() {
         "render" => render::cmd_render(&args[2..]),
+        "psql" => psql::cmd_psql(&args[2..]),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -29,4 +32,5 @@ fn print_usage() {
     println!();
     println!("Commands:");
     println!("  render    Manage the Render CLI (see `mj render` for subcommands)");
+    println!("  psql      Postgres helpers (see `mj psql` for subcommands)");
 }

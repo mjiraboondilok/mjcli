@@ -4,6 +4,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::args::nonempty_trimmed;
+
 pub(crate) const ENV_VAR: &str = "RENDER_API_KEY";
 const APP_DIR: &str = "mj";
 const STORE_FILE: &str = "mj-render-api-key";
@@ -73,11 +75,6 @@ fn env_key() -> Option<String> {
     env::var_os(ENV_VAR)
         .and_then(|s| s.into_string().ok())
         .and_then(|s| nonempty_trimmed(&s))
-}
-
-pub(crate) fn nonempty_trimmed(s: &str) -> Option<String> {
-    let trimmed = s.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 pub(crate) fn default_store() -> Store {
@@ -164,9 +161,9 @@ pub(crate) fn validate_key(key: &str) -> Validity {
     match result {
         Ok(_) => Validity::Valid,
         Err(ureq::Error::StatusCode(401 | 403)) => Validity::Invalid,
-        Err(ureq::Error::StatusCode(code)) => Validity::Unknown(format!(
-            "unexpected HTTP status {code} from the Render API"
-        )),
+        Err(ureq::Error::StatusCode(code)) => {
+            Validity::Unknown(format!("unexpected HTTP status {code} from the Render API"))
+        }
         Err(e) => Validity::Unknown(format!("could not reach the Render API: {e}")),
     }
 }
@@ -182,13 +179,6 @@ mod tests {
             .join("state")
             .join(APP_DIR)
             .join(STORE_FILE)
-    }
-
-    #[test]
-    fn nonempty_trimmed_trims_and_rejects_empty() {
-        assert_eq!(nonempty_trimmed("  rnd_abc  "), Some("rnd_abc".to_owned()));
-        assert_eq!(nonempty_trimmed("   "), None);
-        assert_eq!(nonempty_trimmed(""), None);
     }
 
     #[test]
