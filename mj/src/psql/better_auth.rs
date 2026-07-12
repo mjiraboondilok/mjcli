@@ -124,7 +124,10 @@ fn check(connection: Option<&str>, subcommand: &str) -> ExitCode {
 
     let (found, missing) = partition_tables(&output);
     if missing.is_empty() {
-        println!("All better-auth tables are present ({}).", core_table_list());
+        println!(
+            "All better-auth tables are present ({}).",
+            core_table_list()
+        );
         ExitCode::SUCCESS
     } else {
         eprintln!("Missing better-auth tables: {}.", missing.join(", "));
