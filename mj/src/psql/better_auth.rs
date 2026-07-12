@@ -1,4 +1,6 @@
-use crate::args::parse_single_value_flag_or_usage;
+use crate::args::{parse_single_value_flag_or_usage, parse_value_flags_or_usage};
+use rand::Rng;
+use rand::distr::{Alphanumeric, SampleString};
 use std::env;
 use std::io;
 use std::process::{Command, ExitCode};
@@ -62,6 +64,7 @@ pub(super) fn cmd_psql_better_auth(args: &[String]) -> ExitCode {
     match sub.as_str() {
         "check" => run_with_connection(&args[1..], sub, check),
         "init" => run_with_connection(&args[1..], sub, init),
+        "insert" => cmd_insert(&args[1..], sub),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -101,6 +104,9 @@ fn print_usage() {
     println!("                                          the better-auth tables exist");
     println!("  init [--connection <CONNECTION>]     Create the core better-auth tables");
     println!("                                          (user, session, account, verification)");
+    println!("  insert --email <EMAIL> [--connection <CONNECTION>]");
+    println!("                                        Create a user with a credential account");
+    println!("                                          and print its generated password");
 }
 
 fn check(connection: Option<&str>, subcommand: &str) -> ExitCode {
@@ -153,6 +159,102 @@ fn init(connection: Option<&str>, subcommand: &str) -> ExitCode {
 
     println!("Created the better-auth tables ({}).", core_table_list());
     ExitCode::SUCCESS
+}
+
+const INSERT_USAGE: &str =
+    "Usage: mj psql better-auth insert --email <EMAIL> [--connection <CONNECTION>]";
+
+fn cmd_insert(args: &[String], subcommand: &str) -> ExitCode {
+    let (email, connection) = match parse_insert_args(args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    insert(&email, connection.as_deref(), subcommand)
+}
+
+fn parse_insert_args(args: &[String]) -> Result<(String, Option<String>), ExitCode> {
+    let [email, connection] =
+        parse_value_flags_or_usage(args, &["--email", "--connection"], INSERT_USAGE)?;
+    let email = email.ok_or_else(|| {
+        eprintln!("error: --email is required");
+        eprintln!("{INSERT_USAGE}");
+        ExitCode::FAILURE
+    })?;
+    Ok((email, connection))
+}
+
+fn insert(email: &str, connection: Option<&str>, subcommand: &str) -> ExitCode {
+    let email = email.to_lowercase();
+    let mut rng = rand::rng();
+    let password = generate_random_string(&mut rng, 24);
+    let password_hash = hash_password(&password, &mut rng);
+    let user_id = generate_random_string(&mut rng, 32);
+    let account_id = generate_random_string(&mut rng, 32);
+
+    let sql = insert_sql(&user_id, &account_id, &email, &password_hash);
+    if let Err(e) = run_psql(&sql, connection) {
+        report_failure_with_hint("Could not create the user.", subcommand, &e.message);
+        return ExitCode::FAILURE;
+    }
+
+    println!("Created user {email} (id: {user_id}).");
+    println!("Password: {password}");
+    ExitCode::SUCCESS
+}
+
+fn insert_sql(user_id: &str, account_id: &str, email: &str, password_hash: &str) -> String {
+    format!(
+        r#"
+INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt")
+VALUES ({user_id}, {email}, {email}, FALSE, now(), now());
+
+INSERT INTO "account" ("id", "accountId", "providerId", "userId", "password", "createdAt", "updatedAt")
+VALUES ({account_id}, {user_id}, 'credential', {user_id}, {password_hash}, now(), now());
+"#,
+        user_id = sql_quote(user_id),
+        email = sql_quote(email),
+        account_id = sql_quote(account_id),
+        password_hash = sql_quote(password_hash),
+    )
+}
+
+fn sql_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+fn generate_random_string(rng: &mut impl Rng, len: usize) -> String {
+    Alphanumeric.sample_string(rng, len)
+}
+
+// Matches better-auth's default scrypt config (N = 2^14, r = 16, p = 1, 64-byte
+// derived key, stored as `salt:hex(key)`), so passwords created here verify
+// against better-auth's own login flow.
+const SCRYPT_LOG_N: u8 = 14;
+const SCRYPT_R: u32 = 16;
+const SCRYPT_P: u32 = 1;
+const SCRYPT_DK_LEN: usize = 64;
+
+fn hash_password(password: &str, rng: &mut impl Rng) -> String {
+    let mut salt_bytes = [0u8; 16];
+    rng.fill_bytes(&mut salt_bytes);
+    let salt_hex = hex_encode(&salt_bytes);
+
+    let params = scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P)
+        .expect("static scrypt params are valid");
+    let mut key = [0u8; SCRYPT_DK_LEN];
+    scrypt::scrypt(password.as_bytes(), salt_hex.as_bytes(), &params, &mut key)
+        .expect("fixed-size output buffer is valid");
+
+    format!("{salt_hex}:{}", hex_encode(&key))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(s, "{b:02x}").expect("writing to a String never fails");
+    }
+    s
 }
 
 fn core_table_list() -> String {
@@ -234,6 +336,73 @@ fn run_psql(sql: &str, connection: Option<&str>) -> Result<String, PsqlError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sql_quote_escapes_single_quotes() {
+        assert_eq!(sql_quote("o'brien@example.com"), "'o''brien@example.com'");
+        assert_eq!(sql_quote("plain@example.com"), "'plain@example.com'");
+    }
+
+    #[test]
+    fn insert_sql_reuses_user_id_as_account_id_and_uses_credential_provider() {
+        let sql = insert_sql("user123", "acct456", "a@example.com", "salt:key");
+        assert!(sql.contains(r#"INSERT INTO "user""#));
+        assert!(sql.contains(r#"INSERT INTO "account""#));
+        assert!(sql.contains("'credential'"));
+        assert!(sql.contains("'user123'"));
+        assert!(sql.contains("'acct456'"));
+        assert!(sql.contains("'a@example.com'"));
+        assert!(sql.contains("'salt:key'"));
+    }
+
+    #[test]
+    fn generate_random_string_has_requested_length_and_is_alphanumeric() {
+        let s = generate_random_string(&mut rand::rng(), 32);
+        assert_eq!(s.len(), 32);
+        assert!(s.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn hash_password_round_trips_with_a_from_scratch_scrypt_verify() {
+        let password = "correct horse battery staple";
+        let hash = hash_password(password, &mut rand::rng());
+
+        let (salt_hex, key_hex) = hash.split_once(':').expect("salt:key format");
+        assert_eq!(salt_hex.len(), 32);
+        assert_eq!(key_hex.len(), 128);
+
+        let params = scrypt::Params::new(14, 16, 1).unwrap();
+        let mut key = [0u8; 64];
+        scrypt::scrypt(password.as_bytes(), salt_hex.as_bytes(), &params, &mut key).unwrap();
+        assert_eq!(hex_encode(&key), key_hex);
+
+        let mut wrong_key = [0u8; 64];
+        scrypt::scrypt(
+            b"wrong password",
+            salt_hex.as_bytes(),
+            &params,
+            &mut wrong_key,
+        )
+        .unwrap();
+        assert_ne!(hex_encode(&wrong_key), key_hex);
+    }
+
+    #[test]
+    fn parse_insert_args_requires_email() {
+        let args: Vec<String> = vec![];
+        assert!(parse_insert_args(&args).is_err());
+    }
+
+    #[test]
+    fn parse_insert_args_parses_email_and_connection() {
+        let args: Vec<String> = ["--email", "a@example.com", "--connection", "postgres://x"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let (email, connection) = parse_insert_args(&args).unwrap();
+        assert_eq!(email, "a@example.com");
+        assert_eq!(connection.as_deref(), Some("postgres://x"));
+    }
 
     #[test]
     fn all_tables_present_reports_nothing_missing() {

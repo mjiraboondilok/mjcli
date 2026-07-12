@@ -3,31 +3,42 @@ pub(crate) fn nonempty_trimmed(s: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-pub(crate) fn parse_single_value_flag(
+pub(crate) fn parse_value_flags<const N: usize>(
     args: &[String],
-    flag: &str,
-) -> Result<Option<String>, String> {
+    flags: &[&str; N],
+) -> Result<[Option<String>; N], String> {
+    let mut values: [Option<String>; N] = std::array::from_fn(|_| None);
     let mut rest = args.iter();
-    let mut value: Option<String> = None;
 
     while let Some(arg) = rest.next() {
-        let raw = if arg == flag {
-            rest.next()
-                .ok_or_else(|| format!("error: {flag} requires a value"))?
-                .as_str()
-        } else if let Some(v) = arg.strip_prefix(flag).and_then(|r| r.strip_prefix('=')) {
-            v
-        } else {
+        let Some((idx, flag, inline_value)) = flags.iter().enumerate().find_map(|(i, flag)| {
+            if arg == flag {
+                Some((i, *flag, None))
+            } else {
+                arg.strip_prefix(flag)
+                    .and_then(|r| r.strip_prefix('='))
+                    .map(|v| (i, *flag, Some(v)))
+            }
+        }) else {
             return Err(format!("error: unexpected argument '{arg}'"));
         };
 
-        if value.is_some() {
+        let raw = match inline_value {
+            Some(v) => v,
+            None => rest
+                .next()
+                .ok_or_else(|| format!("error: {flag} requires a value"))?
+                .as_str(),
+        };
+
+        if values[idx].is_some() {
             return Err(format!("error: {flag} given more than once"));
         }
-        value = Some(nonempty_trimmed(raw).ok_or_else(|| format!("error: {flag} value is empty"))?);
+        values[idx] =
+            Some(nonempty_trimmed(raw).ok_or_else(|| format!("error: {flag} value is empty"))?);
     }
 
-    Ok(value)
+    Ok(values)
 }
 
 pub(crate) fn parse_single_value_flag_or_usage(
@@ -35,7 +46,16 @@ pub(crate) fn parse_single_value_flag_or_usage(
     flag: &str,
     usage: &str,
 ) -> Result<Option<String>, std::process::ExitCode> {
-    parse_single_value_flag(args, flag).map_err(|e| {
+    let [value] = parse_value_flags_or_usage(args, &[flag], usage)?;
+    Ok(value)
+}
+
+pub(crate) fn parse_value_flags_or_usage<const N: usize>(
+    args: &[String],
+    flags: &[&str; N],
+    usage: &str,
+) -> Result<[Option<String>; N], std::process::ExitCode> {
+    parse_value_flags(args, flags).map_err(|e| {
         eprintln!("{e}");
         eprintln!("{usage}");
         std::process::ExitCode::FAILURE
@@ -55,7 +75,8 @@ mod tests {
 
     fn parse(args: &[&str], flag: &str) -> Result<Option<String>, String> {
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        parse_single_value_flag(&owned, flag)
+        let [value] = parse_value_flags(&owned, &[flag])?;
+        Ok(value)
     }
 
     #[test]
@@ -103,5 +124,37 @@ mod tests {
     fn unexpected_argument_is_an_error() {
         assert!(parse(&["--nope"], "--api-key").is_err());
         assert!(parse(&["rnd_abc"], "--api-key").is_err());
+    }
+
+    fn parse_multi<const N: usize>(
+        args: &[&str],
+        flags: &[&str; N],
+    ) -> Result<[Option<String>; N], String> {
+        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        parse_value_flags(&owned, flags)
+    }
+
+    #[test]
+    fn multi_flag_parses_each_flag_independent_of_order() {
+        assert_eq!(
+            parse_multi(
+                &["--connection", "postgres://x", "--email", "a@example.com"],
+                &["--email", "--connection"]
+            ),
+            Ok([Some("a@example.com".into()), Some("postgres://x".into())])
+        );
+    }
+
+    #[test]
+    fn multi_flag_allows_some_flags_to_be_absent() {
+        assert_eq!(
+            parse_multi(&["--email=a@example.com"], &["--email", "--connection"]),
+            Ok([Some("a@example.com".into()), None])
+        );
+    }
+
+    #[test]
+    fn multi_flag_rejects_argument_matching_no_known_flag() {
+        assert!(parse_multi(&["--nope", "x"], &["--email", "--connection"]).is_err());
     }
 }

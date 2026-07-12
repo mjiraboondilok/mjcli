@@ -8,7 +8,9 @@ repository = "https://github.com/mjiraboondilok/mjcli"
 readme = "../README.md"
 
 [dependencies]
+rand = "0.10"
 rpassword = "7"
+scrypt = { version = "0.12", default-features = false, features = ["alloc"] }
 tempfile = "3"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
