@@ -1,36 +1,25 @@
-use crate::render::exit::cmd_render_exit;
-use crate::render::init::cmd_render_init;
+use clap::Subcommand;
 use std::process::ExitCode;
 
 mod exit;
 mod init;
 mod shared;
 
-pub fn cmd_render(args: &[String]) -> ExitCode {
-    let Some(sub) = args.first() else {
-        print_usage();
-        return ExitCode::from(1);
-    };
-
-    match sub.as_str() {
-        "init" => cmd_render_init(&args[1..]),
-        "exit" => cmd_render_exit(),
-        "-h" | "--help" | "help" => {
-            print_usage();
-            ExitCode::SUCCESS
-        }
-        other => {
-            eprintln!("mj render: unknown subcommand '{other}'");
-            print_usage();
-            ExitCode::from(1)
-        }
-    }
+#[derive(Subcommand)]
+pub(crate) enum RenderCommand {
+    /// Save and validate a Render API key
+    Init {
+        /// Render API key (prompts if omitted)
+        #[arg(long, value_name = "KEY", value_parser = crate::util::nonempty_arg)]
+        api_key: Option<String>,
+    },
+    /// Delete the saved Render API key
+    Exit,
 }
 
-fn print_usage() {
-    println!("Usage: mj render <subcommand>");
-    println!();
-    println!("Subcommands:");
-    println!("  init [--api-key <KEY>]    Save and validate a Render API key");
-    println!("  exit                      Delete the saved Render API key");
+pub(super) fn run(command: RenderCommand) -> ExitCode {
+    match command {
+        RenderCommand::Init { api_key } => init::cmd_render_init(api_key.as_deref()),
+        RenderCommand::Exit => exit::cmd_render_exit(),
+    }
 }

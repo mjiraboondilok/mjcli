@@ -30,14 +30,18 @@ all with `working-directory: mj`.
 
 ## Architecture
 
-`mj` is a small multi-command CLI with no external command-line-parsing crate — argument parsing
-is hand-rolled in `src/args.rs`.
+`mj` is a small multi-command CLI. Argument parsing and dispatch use `clap`'s derive API
+(the `clap` dependency with its `derive` feature).
 
-**Command dispatch is a two-level match tree.** `main.rs` matches the top-level command name
-(`render`, `psql`) and forwards the remaining args to that command's module, which matches on the
-subcommand name and forwards again. Each subcommand module owns its own `print_usage()` and
-returns `std::process::ExitCode`. Adding a new subcommand means adding a match arm at the
-appropriate level and updating that level's `print_usage()`.
+**Command dispatch is a nested `#[derive(Subcommand)]` tree.** `main.rs` defines the top-level
+`Cli` (`#[derive(Parser)]`) whose `Command` enum has one variant per top-level command (`render`,
+`psql`); each variant embeds that module's own `Subcommand` enum, nesting one level deeper
+(`psql better-auth <check|init|insert>`). Each command module owns its subcommand enum plus a
+`run()` function that matches the parsed variant and returns `std::process::ExitCode`. clap
+generates `--help`/`--version` and all usage/error output; usage errors exit with clap's
+conventional code `2`. Flags whose values must be non-empty use the shared `nonempty_arg` value
+parser in `src/util.rs` (which also holds `nonempty_trimmed`). Adding a subcommand means adding a
+variant to the appropriate enum plus a match arm in that module's `run()`.
 
 **Two independent command trees currently exist:**
 
@@ -52,15 +56,17 @@ appropriate level and updating that level's `print_usage()`.
   - Key files are written via `tempfile` + atomic rename with owner-only (`0600`) permissions.
 
 - `psql` (`src/psql/`) — helpers for Postgres schemas managed by `better-auth`.
-  - `psql better-auth check` / `init` shell out to the system `psql` binary (not a Postgres
-    driver crate) to check for or create the four core better-auth tables (`user`, `session`,
-    `account`, `verification`). The `CREATE TABLE IF NOT EXISTS` DDL lives inline in
-    `src/psql/better_auth.rs`, so the table declaration order matters for foreign keys (`user`
-    must precede `session`/`account`, which is verified by a test).
+  - `psql better-auth check` / `init` / `insert` shell out to the system `psql` binary (not a
+    Postgres driver crate): `check` verifies the four core better-auth tables (`user`, `session`,
+    `account`, `verification`) exist, `init` creates them, and `insert` creates a user with a
+    credential account (scrypt password hash matching better-auth's defaults). The
+    `CREATE TABLE IF NOT EXISTS` DDL lives inline in `src/psql/better_auth.rs`, so the table
+    declaration order matters for foreign keys (`user` must precede `session`/`account`, which is
+    verified by a test).
   - `psql` exit code `2` specifically means "could not connect" (vs. a query/syntax error) —
     `run_psql` uses this to distinguish connection failures from query failures and print the
     right hint (env vars, `~/.pgpass`, or `--connection <URL>`).
 
-When adding a new top-level command or subcommand, follow the existing shape: a `cmd_*` function
-returning `ExitCode`, a local `print_usage()`, and shared logic factored into a `shared/` module
-if more than one subcommand needs it (see `render/shared/`).
+When adding a new top-level command or subcommand, follow the existing shape: a `Subcommand` enum
+variant, a `run()` dispatcher returning `ExitCode`, and shared logic factored into a `shared/`
+module if more than one subcommand needs it (see `render/shared/`).
