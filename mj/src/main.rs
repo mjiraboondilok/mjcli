@@ -1,36 +1,45 @@
-use std::env;
+use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 
-mod args;
 mod psql;
 mod render;
+mod util;
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Manage the Render CLI (see `mj render` for subcommands)
+    Render {
+        #[command(subcommand)]
+        command: render::RenderCommand,
+    },
+    /// Postgres helpers (see `mj psql` for subcommands)
+    Psql {
+        #[command(subcommand)]
+        command: psql::PsqlCommand,
+    },
+}
 
 fn main() -> ExitCode {
-    let args: Vec<String> = env::args().collect();
-    let Some(cmd) = args.get(1) else {
-        print_usage();
-        return ExitCode::from(1);
-    };
-
-    match cmd.as_str() {
-        "render" => render::cmd_render(&args[2..]),
-        "psql" => psql::cmd_psql(&args[2..]),
-        "-h" | "--help" | "help" => {
-            print_usage();
-            ExitCode::SUCCESS
-        }
-        other => {
-            eprintln!("mj: unknown command '{other}'");
-            print_usage();
-            ExitCode::from(1)
-        }
+    match Cli::parse().command {
+        Command::Render { command } => render::run(command),
+        Command::Psql { command } => psql::run(command),
     }
 }
 
-fn print_usage() {
-    println!("Usage: mj <command>");
-    println!();
-    println!("Commands:");
-    println!("  render    Manage the Render CLI (see `mj render` for subcommands)");
-    println!("  psql      Postgres helpers (see `mj psql` for subcommands)");
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
 }

@@ -1,22 +1,13 @@
-use crate::args::{nonempty_trimmed, parse_single_value_flag_or_usage};
 use crate::render::shared::auth::{self, Validity};
+use crate::util::nonempty_trimmed;
 use std::io;
 use std::process::ExitCode;
 
-pub(super) fn cmd_render_init(args: &[String]) -> ExitCode {
-    let provided_key = match parse_single_value_flag_or_usage(
-        args,
-        "--api-key",
-        "Usage: mj render init [--api-key <KEY>]",
-    ) {
-        Ok(key) => key,
-        Err(code) => return code,
-    };
-
+pub(super) fn cmd_render_init(provided_key: Option<&str>) -> ExitCode {
     let store = auth::default_store();
 
     if let Some(key) = provided_key {
-        return validate_and_save(&store, &key);
+        return validate_and_save(&store, key);
     }
 
     if let Some((existing, source)) = store.effective_key() {

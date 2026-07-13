@@ -1,4 +1,5 @@
-use crate::args::{parse_single_value_flag_or_usage, parse_value_flags_or_usage};
+use crate::util::nonempty_arg;
+use clap::{Args, Subcommand};
 use rand::Rng;
 use rand::distr::{Alphanumeric, SampleString};
 use std::env;
@@ -55,67 +56,50 @@ CREATE TABLE IF NOT EXISTS "verification" (
 );
 "#;
 
-pub(super) fn cmd_psql_better_auth(args: &[String]) -> ExitCode {
-    let Some(sub) = args.first() else {
-        print_usage();
-        return ExitCode::from(1);
-    };
+#[derive(Args)]
+pub(crate) struct ConnectionArg {
+    /// Postgres connection URL (defaults to psql's env vars / ~/.pgpass)
+    #[arg(long, value_name = "CONNECTION", value_parser = nonempty_arg)]
+    connection: Option<String>,
+}
 
-    match sub.as_str() {
-        "check" => run_with_connection(&args[1..], sub, check),
-        "init" => run_with_connection(&args[1..], sub, init),
-        "insert" => cmd_insert(&args[1..], sub),
-        "-h" | "--help" | "help" => {
-            print_usage();
-            ExitCode::SUCCESS
-        }
-        other => {
-            eprintln!("mj psql better-auth: unknown subcommand '{other}'");
-            print_usage();
-            ExitCode::from(1)
-        }
+#[derive(Subcommand)]
+pub(crate) enum BetterAuthCommand {
+    /// Check that psql connects and that the better-auth tables exist
+    Check {
+        #[command(flatten)]
+        conn: ConnectionArg,
+    },
+    /// Create the core better-auth tables (user, session, account, verification)
+    Init {
+        #[command(flatten)]
+        conn: ConnectionArg,
+    },
+    /// Create a user with a credential account and print its generated password
+    Insert {
+        /// Email address for the new user
+        #[arg(long, value_name = "EMAIL", value_parser = nonempty_arg)]
+        email: String,
+        #[command(flatten)]
+        conn: ConnectionArg,
+    },
+}
+
+pub(super) fn run(command: BetterAuthCommand) -> ExitCode {
+    match command {
+        BetterAuthCommand::Check { conn } => check(conn.connection.as_deref()),
+        BetterAuthCommand::Init { conn } => init(conn.connection.as_deref()),
+        BetterAuthCommand::Insert { email, conn } => insert(&email, conn.connection.as_deref()),
     }
 }
 
-fn run_with_connection(
-    args: &[String],
-    subcommand: &str,
-    action: fn(Option<&str>, &str) -> ExitCode,
-) -> ExitCode {
-    match parse_connection(args, subcommand) {
-        Ok(connection) => action(connection.as_deref(), subcommand),
-        Err(code) => code,
-    }
-}
-
-fn parse_connection(args: &[String], subcommand: &str) -> Result<Option<String>, ExitCode> {
-    parse_single_value_flag_or_usage(
-        args,
-        "--connection",
-        &format!("Usage: mj psql better-auth {subcommand} [--connection <CONNECTION>]"),
-    )
-}
-
-fn print_usage() {
-    println!("Usage: mj psql better-auth <subcommand>");
-    println!();
-    println!("Subcommands:");
-    println!("  check [--connection <CONNECTION>]    Check that psql connects and that");
-    println!("                                          the better-auth tables exist");
-    println!("  init [--connection <CONNECTION>]     Create the core better-auth tables");
-    println!("                                          (user, session, account, verification)");
-    println!("  insert --email <EMAIL> [--connection <CONNECTION>]");
-    println!("                                        Create a user with a credential account");
-    println!("                                          and print its generated password");
-}
-
-fn check(connection: Option<&str>, subcommand: &str) -> ExitCode {
+fn check(connection: Option<&str>) -> ExitCode {
     let output = match run_psql(&table_lookup_query(), connection) {
         Ok(output) => output,
         Err(e) if e.connection_failed => {
             report_failure_with_hint(
                 "Could not connect to Postgres with psql.",
-                subcommand,
+                "check",
                 &e.message,
             );
             return ExitCode::FAILURE;
@@ -147,11 +131,11 @@ fn check(connection: Option<&str>, subcommand: &str) -> ExitCode {
     }
 }
 
-fn init(connection: Option<&str>, subcommand: &str) -> ExitCode {
+fn init(connection: Option<&str>) -> ExitCode {
     if let Err(e) = run_psql(CREATE_TABLES_SQL, connection) {
         report_failure_with_hint(
             "Could not create the better-auth tables.",
-            subcommand,
+            "init",
             &e.message,
         );
         return ExitCode::FAILURE;
@@ -161,29 +145,7 @@ fn init(connection: Option<&str>, subcommand: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-const INSERT_USAGE: &str =
-    "Usage: mj psql better-auth insert --email <EMAIL> [--connection <CONNECTION>]";
-
-fn cmd_insert(args: &[String], subcommand: &str) -> ExitCode {
-    let (email, connection) = match parse_insert_args(args) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    insert(&email, connection.as_deref(), subcommand)
-}
-
-fn parse_insert_args(args: &[String]) -> Result<(String, Option<String>), ExitCode> {
-    let [email, connection] =
-        parse_value_flags_or_usage(args, &["--email", "--connection"], INSERT_USAGE)?;
-    let email = email.ok_or_else(|| {
-        eprintln!("error: --email is required");
-        eprintln!("{INSERT_USAGE}");
-        ExitCode::FAILURE
-    })?;
-    Ok((email, connection))
-}
-
-fn insert(email: &str, connection: Option<&str>, subcommand: &str) -> ExitCode {
+fn insert(email: &str, connection: Option<&str>) -> ExitCode {
     let email = email.to_lowercase();
     let mut rng = rand::rng();
     let password = generate_random_string(&mut rng, 24);
@@ -193,7 +155,7 @@ fn insert(email: &str, connection: Option<&str>, subcommand: &str) -> ExitCode {
 
     let sql = insert_sql(&user_id, &account_id, &email, &password_hash);
     if let Err(e) = run_psql(&sql, connection) {
-        report_failure_with_hint("Could not create the user.", subcommand, &e.message);
+        report_failure_with_hint("Could not create the user.", "insert", &e.message);
         return ExitCode::FAILURE;
     }
 
@@ -385,23 +347,6 @@ mod tests {
         )
         .unwrap();
         assert_ne!(hex_encode(&wrong_key), key_hex);
-    }
-
-    #[test]
-    fn parse_insert_args_requires_email() {
-        let args: Vec<String> = vec![];
-        assert!(parse_insert_args(&args).is_err());
-    }
-
-    #[test]
-    fn parse_insert_args_parses_email_and_connection() {
-        let args: Vec<String> = ["--email", "a@example.com", "--connection", "postgres://x"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        let (email, connection) = parse_insert_args(&args).unwrap();
-        assert_eq!(email, "a@example.com");
-        assert_eq!(connection.as_deref(), Some("postgres://x"));
     }
 
     #[test]

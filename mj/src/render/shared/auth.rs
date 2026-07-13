@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::args::nonempty_trimmed;
+use crate::util::nonempty_trimmed;
 
 pub(crate) const ENV_VAR: &str = "RENDER_API_KEY";
 const APP_DIR: &str = "mj";
